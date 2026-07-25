@@ -5,6 +5,7 @@ import { decodePayload } from '../utils/payload.js'
 import { getOccasion } from '../theme/occasions.js'
 import { renderRichText } from '../utils/inline.jsx'
 import { getGame } from '../games/index.js'
+import { fetchRawGift } from '../utils/github.js'
 
 // Accept an encoded `data` string (URL fragment), a `slug` (fetch /gifts/<slug>.json),
 // or a `payload` object (used by the Admin preview panel).
@@ -20,22 +21,39 @@ export default function Gift({ data, slug, payload: payloadProp, embedded = fals
   // 'idle' | 'loading' | 'ready' | 'missing'
   useEffect(() => {
     if (!slug) { setLoadState('idle'); return }
+    let cancelled = false
     setFetched(null); setLoadState('loading')
-    fetch(`./gifts/${slug}.json`, { cache: 'no-cache' })
-      .then((r) => { if (!r.ok) throw new Error('not-found'); return r.json() })
-      .then((json) => { setFetched(json); setLoadState('ready') })
-      .catch(() => {
-        // Fallback: a local draft saved from the Studio in this browser.
-        try {
-          const cached = localStorage.getItem(`gift:${slug}`)
-          if (cached) {
-            setFetched(JSON.parse(cached))
-            setLoadState('ready')
-            return
-          }
-        } catch { /* localStorage unavailable */ }
-        setLoadState('missing')
-      })
+
+    const set = (json) => {
+      if (cancelled) return
+      setFetched(json); setLoadState('ready')
+    }
+    const missing = () => { if (!cancelled) setLoadState('missing') }
+
+    ;(async () => {
+      // 1. Try the deployed Pages copy first (edge-cached, instant).
+      try {
+        const r = await fetch(`./gifts/${slug}.json`, { cache: 'no-cache' })
+        if (r.ok) return set(await r.json())
+      } catch { /* network or cors, fall through */ }
+
+      // 2. Try the raw file on main branch — available seconds after publish,
+      //    even before the next Pages redeploy.
+      try {
+        const json = await fetchRawGift(slug)
+        return set(json)
+      } catch { /* not published yet */ }
+
+      // 3. Fall back to a local draft saved from the Studio in this browser.
+      try {
+        const cached = localStorage.getItem(`gift:${slug}`)
+        if (cached) return set(JSON.parse(cached))
+      } catch { /* localStorage unavailable */ }
+
+      missing()
+    })()
+
+    return () => { cancelled = true }
   }, [slug])
 
   const payload = inlinePayload || fetched
@@ -56,12 +74,10 @@ export default function Gift({ data, slug, payload: payloadProp, embedded = fals
           <div className="card">
             <h1>Not published yet</h1>
             <p>
-              No gift file for <code style={{ padding: '2px 6px', background: 'var(--sand)', borderRadius: 4 }}>{slug}</code> was found on this site,
-              and no draft was saved locally in this browser.
+              No gift file for <code style={{ padding: '2px 6px', background: 'var(--sand)', borderRadius: 4 }}>{slug}</code> exists yet.
             </p>
             <p style={{ fontSize: 14, marginTop: 14, color: 'var(--ink-soft)', lineHeight: 1.55 }}>
-              Making it right now? Open the Studio, click <b>Copy short link</b> to save the draft here, then <b>Download gift file</b>,
-              drop it into <code>public/gifts/</code>, and run <code>npm run deploy</code>.
+              Open the Studio, fill it in, and hit <b>Publish</b>. The link will work within a minute.
             </p>
             <div className="row" style={{ marginTop: 18 }}>
               <a className="btn" href="#/admin">Open the Studio</a>

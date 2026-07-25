@@ -3,7 +3,9 @@ import Gift from './Gift.jsx'
 import { OCCASIONS, RECIPIENTS, DEFAULT_OCCASION, DEFAULT_RECIPIENT } from '../theme/occasions.js'
 import { buildShareUrl, buildShortUrl } from '../utils/payload.js'
 import { approximateSizeKB, compressImageFile } from '../utils/image.js'
-import { downloadJson, slugify, suggestSlug } from '../utils/slug.js'
+import { slugify, suggestSlug } from '../utils/slug.js'
+import { clearPAT, commitGift, getPAT, savePAT } from '../utils/github.js'
+import { REPO_NAME, REPO_OWNER } from '../config.js'
 
 const empty = {
   recipient: DEFAULT_RECIPIENT,
@@ -115,11 +117,6 @@ export default function Admin() {
     window.open(url, '_blank', 'noopener')
   }
 
-  function downloadGiftFile() {
-    if (!slug) return
-    downloadJson(`${slug}.json`, payload)
-  }
-
   function reset() {
     if (confirm('Clear everything and start over?')) {
       setState(empty)
@@ -132,6 +129,40 @@ export default function Admin() {
     e.preventDefault()
     setDrag(false)
     if (e.dataTransfer.files?.length) handleFiles(e.dataTransfer.files)
+  }
+
+  // ---------- Publish flow ----------
+  const [pat, setPat] = useState(() => getPAT())
+  const [patInput, setPatInput] = useState('')
+  const [showPatSetup, setShowPatSetup] = useState(false)
+  const [publishState, setPublishState] = useState({ status: 'idle', msg: '', url: '' })
+  // status: 'idle' | 'publishing' | 'ok' | 'err'
+
+  function savePat() {
+    const t = patInput.trim()
+    if (!t) return
+    savePAT(t)
+    setPat(t)
+    setPatInput('')
+    setShowPatSetup(false)
+    setPublishState({ status: 'idle', msg: '', url: '' })
+  }
+  function forgetPat() {
+    if (!confirm('Remove the token from this browser? You will need to paste it again to publish.')) return
+    clearPAT()
+    setPat('')
+  }
+
+  async function publish() {
+    if (!slug) { setPublishState({ status: 'err', msg: 'Please give it a slug first.', url: '' }); return }
+    if (!pat) { setShowPatSetup(true); return }
+    setPublishState({ status: 'publishing', msg: '', url: '' })
+    try {
+      const { shortUrl } = await commitGift({ slug, payload, token: pat })
+      setPublishState({ status: 'ok', msg: 'Published! The link works within a minute.', url: shortUrl })
+    } catch (e) {
+      setPublishState({ status: 'err', msg: e.message || 'Something went wrong.', url: '' })
+    }
   }
 
   return (
@@ -306,10 +337,12 @@ export default function Admin() {
           </button>
         </div>
 
-        {/* Short-link section */}
+        {/* Publish */}
         <div className="share-box">
-          <div style={{ fontWeight: 700, color: 'var(--accent-deep)' }}>Short link · needs a small file commit</div>
+          <div style={{ fontWeight: 700, color: 'var(--accent-deep)' }}>Publish & share</div>
+
           <div className="field" style={{ margin: '10px 0 6px' }}>
+            <label>Slug (the friendly bit of the URL)</label>
             <input
               type="text"
               value={slug}
@@ -318,38 +351,97 @@ export default function Admin() {
               aria-label="Slug"
             />
           </div>
-          <div className="url" title="The short URL your recipient will get.">{shortUrl || '—'}</div>
-          <div style={{ fontSize: 12, color: 'var(--ink-soft)', marginBottom: 8, lineHeight: 1.45 }}>
-            1. Click <b>Download gift file</b> — save it as <code>{slug || 'slug'}.json</code>.<br />
-            2. Put it in <code>public/gifts/</code> and run <code>npm run deploy</code>.<br />
-            3. Send the short link. Recipient just opens it.
-          </div>
+          <div className="url" title="The link your recipient will open.">{shortUrl || '—'}</div>
+
+          {/* PAT setup (first time on this browser, or if user clicked change) */}
+          {(showPatSetup || !pat) && (
+            <div style={{ background: 'rgba(255,255,255,0.7)', border: '1px solid var(--border)', borderRadius: 10, padding: 12, marginBottom: 10 }}>
+              <div style={{ fontSize: 13, color: 'var(--ink)', lineHeight: 1.5, marginBottom: 8 }}>
+                One-time setup on this browser. Create a fine-grained GitHub token so this page can commit gift files for you.
+              </div>
+              <ol style={{ fontSize: 12, color: 'var(--ink-soft)', paddingLeft: 18, margin: '0 0 10px', lineHeight: 1.55 }}>
+                <li>
+                  Open{' '}
+                  <a href="https://github.com/settings/personal-access-tokens/new" target="_blank" rel="noreferrer">
+                    github.com/settings/personal-access-tokens/new
+                  </a>.
+                </li>
+                <li><b>Repository access</b> → Only select repositories → <code>{REPO_OWNER}/{REPO_NAME}</code>.</li>
+                <li><b>Repository permissions</b> → <b>Contents</b>: Read and write.</li>
+                <li>Generate the token, copy it, and paste below.</li>
+              </ol>
+              <input
+                type="password"
+                autoComplete="new-password"
+                value={patInput}
+                onChange={(e) => setPatInput(e.target.value)}
+                placeholder="github_pat_…"
+                style={{ width: '100%', boxSizing: 'border-box', padding: '10px 12px', border: '1px solid var(--border)', borderRadius: 8, font: 'inherit' }}
+              />
+              <div className="actions" style={{ marginTop: 8 }}>
+                <button type="button" className="btn" onClick={savePat} disabled={!patInput.trim()}>Save token</button>
+                {pat && <button type="button" className="btn ghost small" onClick={() => setShowPatSetup(false)}>Cancel</button>}
+              </div>
+              <div style={{ fontSize: 11, color: 'var(--muted)', marginTop: 8 }}>
+                The token stays in this browser's localStorage. It is never sent to any server except github.com.
+              </div>
+            </div>
+          )}
+
           <div className="actions">
-            <button type="button" className="btn" onClick={downloadGiftFile} disabled={!slug}>Download gift file</button>
-            <button type="button" className="btn ghost" onClick={() => copyText(shortUrl, 'Short link copied!')} disabled={!shortUrl}>Copy short link</button>
+            <button
+              type="button"
+              className="btn"
+              onClick={publish}
+              disabled={publishState.status === 'publishing' || !slug}
+            >
+              {publishState.status === 'publishing' ? 'Publishing…' : (pat ? 'Publish surprise' : 'Set up token & publish')}
+            </button>
+            <button type="button" className="btn ghost" onClick={() => copyText(shortUrl, 'Link copied!')} disabled={!shortUrl}>
+              Copy link
+            </button>
+            {pat && !showPatSetup && (
+              <button type="button" className="btn ghost small" onClick={() => setShowPatSetup(true)}>Change token</button>
+            )}
+            {pat && !showPatSetup && (
+              <button type="button" className="btn ghost small" onClick={forgetPat}>Forget token</button>
+            )}
           </div>
+          {publishState.status === 'ok' && (
+            <div style={{ marginTop: 10, padding: 10, background: '#eaf4e6', border: '1px solid #b5d5a3', borderRadius: 8, color: '#3a5a2e', fontSize: 13 }}>
+              ✓ {publishState.msg}
+              <div style={{ marginTop: 4 }}>
+                <a href={publishState.url} target="_blank" rel="noreferrer">{publishState.url}</a>
+              </div>
+            </div>
+          )}
+          {publishState.status === 'err' && (
+            <div style={{ marginTop: 10, padding: 10, background: '#f9e6e2', border: '1px solid #d9a89f', borderRadius: 8, color: '#8f3a2c', fontSize: 13 }}>
+              {publishState.msg}
+            </div>
+          )}
+          {copyMsg && <div style={{ marginTop: 8, fontSize: 13, color: 'var(--accent-deep)' }}>{copyMsg}</div>}
         </div>
 
-        {/* Self-contained fallback */}
-        <div className="share-box" style={{ background: 'linear-gradient(135deg, #f4f0ea, #fffefc)', borderColor: 'var(--border)' }}>
-          <div style={{ fontWeight: 700, color: 'var(--ink)' }}>Self-contained link · long, but zero setup</div>
-          <div style={{ fontSize: 12, color: 'var(--ink-soft)', margin: '4px 0 8px' }}>
-            The entire gift lives inside this URL — no file commit needed. Great for tiny gifts, painful for photo-heavy ones.
+        {/* Self-contained fallback — for when you can't/don't want to publish */}
+        <details className="share-box" style={{ background: 'linear-gradient(135deg, #f4f0ea, #fffefc)', borderColor: 'var(--border)' }}>
+          <summary style={{ cursor: 'pointer', fontWeight: 700, color: 'var(--ink)' }}>
+            Or use a self-contained link (no publish needed)
+          </summary>
+          <div style={{ fontSize: 12, color: 'var(--ink-soft)', margin: '8px 0' }}>
+            The entire gift lives inside this URL — great for a quick text-only note. Painful for photo-heavy ones because it gets very long.
           </div>
-          <div className="url" title="This is the whole gift, compressed into a URL.">
-            {shareUrl || '—'}
-          </div>
+          <div className="url">{shareUrl || '—'}</div>
           <div style={{ fontSize: 12, color: 'var(--ink-soft)', marginBottom: 8 }}>
             Length: {shareUrl.length.toLocaleString()} chars
-            {shareUrl.length > 8000 && ' · getting long — prefer the short link above'}
+            {shareUrl.length > 8000 && ' · getting long — Publish above is better'}
           </div>
           <div className="actions">
             <button type="button" className="btn ghost" onClick={() => copyText(shareUrl)}>Copy long link</button>
             <button type="button" className="btn ghost" onClick={() => openInNewTab(shareUrl)}>Open in new tab</button>
             <button type="button" className="btn ghost small" onClick={reset}>Reset</button>
           </div>
-          {copyMsg && <div style={{ marginTop: 8, fontSize: 13, color: 'var(--accent-deep)' }}>{copyMsg}</div>}
-        </div>
+        </details>
       </form>
 
       <aside className="preview-panel">
