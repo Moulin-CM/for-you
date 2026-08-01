@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useDeferredValue, useEffect, useMemo, useRef, useState } from 'react'
 import Gift from './Gift.jsx'
 import { OCCASIONS, RECIPIENTS, DEFAULT_OCCASION, DEFAULT_RECIPIENT } from '../theme/occasions.js'
 import { buildShareUrl, buildShortUrl } from '../utils/payload.js'
@@ -18,6 +18,12 @@ const empty = {
   photos: [],   // [{ src, caption }]
   surprises: [''],
   includeGames: true,
+  // Little extras
+  extraNote: '',                                    // handwritten short note
+  songs: [{ title: '', artist: '', url: '' }],      // shared soundtrack
+  certificate: false,                               // "Official Bestie Card"
+  certSince: '',                                    // "2019"
+  oneMore: '',                                      // easter-egg reveal line
 }
 
 export default function Admin() {
@@ -31,7 +37,10 @@ export default function Admin() {
 
   const update = (patch) => setState((s) => ({ ...s, ...patch }))
 
-  const payload = state
+  // Deferred snapshot of state — form fields stay bound to `state` (responsive
+  // typing), while expensive derivations (share URL encoding + full preview
+  // render) use `payload` and only recompute after the user pauses.
+  const payload = useDeferredValue(state)
 
   // Auto-suggest a slug from from/to/occasion until the user edits it.
   useEffect(() => {
@@ -40,13 +49,30 @@ export default function Admin() {
     }
   }, [state.from, state.to, state.occasion, slugTouched])
 
+  const [cacheWarning, setCacheWarning] = useState('')
+
   // Cache the current draft under its slug so the short link renders instantly
-  // in this browser — no commit/deploy needed to preview. A real committed
-  // JSON file always wins over this cache in Gift.jsx.
+  // in this browser — no commit/deploy needed to preview. If the full state
+  // (with photos) is too big for localStorage, fall back to a text-only save
+  // so the recipient's short link still shows message/note/etc. Photos then
+  // need to be viewed via the self-contained long link or after publishing.
   useEffect(() => {
     if (!slug) return
     const id = setTimeout(() => {
-      try { localStorage.setItem(`gift:${slug}`, JSON.stringify(state)) } catch { /* full or blocked */ }
+      const payload = JSON.stringify(state)
+      try {
+        localStorage.setItem(`gift:${slug}`, payload)
+        setCacheWarning('')
+      } catch {
+        // Full-state save failed (usually quota exceeded from photo base64).
+        try {
+          const lite = JSON.stringify({ ...state, photos: [] })
+          localStorage.setItem(`gift:${slug}`, lite)
+          setCacheWarning(`Photos are too large to cache locally (${Math.round(payload.length / 1024)} KB draft). Text is saved — photos will only appear in the self-contained long link, or after publishing.`)
+        } catch {
+          setCacheWarning('Local draft cache is full. Try clearing old drafts via DevTools → Application → Local Storage.')
+        }
+      }
     }, 250)
     return () => clearTimeout(id)
   }, [slug, state])
@@ -101,6 +127,16 @@ export default function Admin() {
   }
   function removeSurprise(i) {
     setState((s) => ({ ...s, surprises: s.surprises.filter((_, idx) => idx !== i) }))
+  }
+
+  function setSong(i, patch) {
+    setState((s) => ({ ...s, songs: s.songs.map((x, idx) => idx === i ? { ...x, ...patch } : x) }))
+  }
+  function addSong() {
+    setState((s) => ({ ...s, songs: [...s.songs, { title: '', artist: '', url: '' }] }))
+  }
+  function removeSong(i) {
+    setState((s) => ({ ...s, songs: s.songs.filter((_, idx) => idx !== i) }))
   }
 
   async function copyText(text, ok = 'Copied!') {
@@ -158,7 +194,7 @@ export default function Admin() {
     if (!pat) { setShowPatSetup(true); return }
     setPublishState({ status: 'publishing', msg: '', url: '' })
     try {
-      const { shortUrl } = await commitGift({ slug, payload, token: pat })
+      const { shortUrl } = await commitGift({ slug, payload: state, token: pat })
       setPublishState({ status: 'ok', msg: 'Published! The link works within a minute.', url: shortUrl })
     } catch (e) {
       setPublishState({ status: 'err', msg: e.message || 'Something went wrong.', url: '' })
@@ -207,7 +243,7 @@ export default function Admin() {
         </div>
 
         <div className="field">
-          <label>Mini-games (occasion-specific, always skippable)</label>
+          <label>Surprise gifts</label>
           <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 14, color: 'var(--ink)', cursor: 'pointer', textTransform: 'none', letterSpacing: 0, fontWeight: 400 }}>
             <input
               type="checkbox"
@@ -215,12 +251,10 @@ export default function Admin() {
               onChange={(e) => update({ includeGames: e.target.checked })}
               style={{ width: 16, height: 16 }}
             />
-            Gate the album + message behind a tiny game
+            Wrap the album + message inside surprise gifts to unwrap
           </label>
           <p style={{ fontSize: 12, color: 'var(--muted)', margin: '6px 0 0' }}>
-            {state.occasion === 'birthday' && 'Blow out candles → album · Untie the gift box → message'}
-            {state.occasion === 'rakhi' && 'Tie the rakhi → album · Open the mithai box → message'}
-            {state.occasion === 'friendship' && 'Bloom the flower → album · Catch three stars → message'}
+            Two identical mystery gifts appear — she won't know which one holds the album and which holds the note until she taps to unwrap.
           </p>
         </div>
 
@@ -337,9 +371,100 @@ export default function Admin() {
           </button>
         </div>
 
+        {/* Little extras — all optional */}
+        <details className="share-box" style={{ background: 'linear-gradient(135deg, #fff4ea, #fffefc)', borderColor: 'var(--border)' }} open>
+          <summary style={{ cursor: 'pointer', fontWeight: 700, color: 'var(--accent-deep)' }}>
+            Little extras ✿ (all optional)
+          </summary>
+
+          <div className="field" style={{ marginTop: 12 }}>
+            <label>A little handwritten note (optional)</label>
+            <textarea
+              value={state.extraNote}
+              onChange={(e) => update({ extraNote: e.target.value })}
+              placeholder="A short line or two — shown in a handwritten script, like a folded note."
+              style={{ minHeight: 70 }}
+            />
+          </div>
+
+          <div className="field">
+            <label>Songs that sound like us (optional)</label>
+            <ul className="mini-list">
+              {state.songs.map((song, i) => (
+                <li key={i} style={{ flexDirection: 'column', alignItems: 'stretch', gap: 4 }}>
+                  <div style={{ display: 'flex', gap: 8 }}>
+                    <input
+                      type="text"
+                      value={song.title}
+                      onChange={(e) => setSong(i, { title: e.target.value })}
+                      placeholder="Song title"
+                    />
+                    <input
+                      type="text"
+                      value={song.artist}
+                      onChange={(e) => setSong(i, { artist: e.target.value })}
+                      placeholder="Artist"
+                      style={{ maxWidth: 130 }}
+                    />
+                    <button type="button" onClick={() => removeSong(i)} aria-label="Remove song">−</button>
+                  </div>
+                  <input
+                    type="url"
+                    value={song.url}
+                    onChange={(e) => setSong(i, { url: e.target.value })}
+                    placeholder="Link (Spotify / YouTube — optional)"
+                    style={{ fontSize: 12 }}
+                  />
+                </li>
+              ))}
+            </ul>
+            <button type="button" className="btn ghost small" onClick={addSong} style={{ marginTop: 8 }}>
+              + add another song
+            </button>
+          </div>
+
+          <div className="field">
+            <label>Official {RECIPIENTS[state.recipient]?.label || 'Bestie'} card</label>
+            <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 14, color: 'var(--ink)', cursor: 'pointer', textTransform: 'none', letterSpacing: 0, fontWeight: 400 }}>
+              <input
+                type="checkbox"
+                checked={state.certificate}
+                onChange={(e) => update({ certificate: e.target.checked })}
+                style={{ width: 16, height: 16 }}
+              />
+              Include a playful "Official {RECIPIENTS[state.recipient]?.label || 'Bestie'} Card" she can screenshot
+            </label>
+            {state.certificate && (
+              <input
+                type="text"
+                value={state.certSince}
+                onChange={(e) => update({ certSince: e.target.value })}
+                placeholder="Bestie since… (e.g. 2019)"
+                style={{ marginTop: 8 }}
+              />
+            )}
+          </div>
+
+          <div className="field" style={{ marginBottom: 0 }}>
+            <label>"One more?" — a hidden little line at the very end</label>
+            <input
+              type="text"
+              value={state.oneMore}
+              onChange={(e) => update({ oneMore: e.target.value })}
+              placeholder='e.g. "seriously though — thank you for being you."'
+            />
+          </div>
+        </details>
+
         {/* Publish */}
         <div className="share-box">
           <div style={{ fontWeight: 700, color: 'var(--accent-deep)' }}>Publish & share</div>
+
+          {cacheWarning && (
+            <div style={{ marginTop: 10, padding: 10, background: '#fdf4e0', border: '1px solid #e2c48a', borderRadius: 8, color: '#7a5a1a', fontSize: 12, lineHeight: 1.5 }}>
+              ⚠ {cacheWarning}
+            </div>
+          )}
 
           <div className="field" style={{ margin: '10px 0 6px' }}>
             <label>Slug (the friendly bit of the URL)</label>

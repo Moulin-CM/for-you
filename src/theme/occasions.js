@@ -12,8 +12,8 @@ export const OCCASIONS = {
     defaultSignoff: 'always in your corner,',
     surprisesHeading: 'A few things I want you to know',
     galleryHeading: 'A little photo album of us',
-    games: { album: 'bloom', message: 'stars' },
   },
+  //12-may-2025
   rakhi: {
     id: 'rakhi',
     label: 'Rakshabandhan',
@@ -22,23 +22,21 @@ export const OCCASIONS = {
     heroTitle: (name) => `For ${name || 'my sister'},`,
     lede: 'A promise wrapped in a thread — I am here, I have always been, and I always will be.',
     ornament: 'thread',
-    defaultSignoff: 'your (annoying but proud) sibling,',
+    defaultSignoff: 'your (annoying but proud) bro,',
     surprisesHeading: 'Little things I never say out loud',
     galleryHeading: 'Some moments I want to keep',
-    games: { album: 'rakhi', message: 'sweetsBox' },
   },
   birthday: {
     id: 'birthday',
     label: 'Birthday',
     themeClass: 'theme-birthday',
-    kicker: 'Happy Birthday',
-    heroTitle: (name) => `Happiest Birthday, ${name || 'you'}!`,
+    kicker: 'Happiest Birthday',
+    heroTitle: (name) => `${name || 'you'}!`,
     lede: 'One more trip around the sun for someone the world is genuinely lucky to have.',
     ornament: 'confetti',
     defaultSignoff: 'wishing you the softest year,',
     surprisesHeading: 'Wishes for your year ahead',
     galleryHeading: 'A tiny gallery of you',
-    games: { album: 'candles', message: 'giftbox' },
   },
 }
 
